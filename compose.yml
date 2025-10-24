@@ -1,0 +1,11 @@
+services:
+  n8n-cleaner-app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: n8n-cleaner-app
+    ports: 
+      - "8000:80"
+    volumes:
+      - ./n8n_ffmpeg:/app/n8n_ffmpeg
+    restart: always
