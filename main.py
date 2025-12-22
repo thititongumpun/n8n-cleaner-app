@@ -1,10 +1,13 @@
 from fastapi import FastAPI, Request, HTTPException, Form
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import RedirectResponse
+from fastapi.responses import RedirectResponse, FileResponse, StreamingResponse
 from pathlib import Path
 from typing import List
 import shutil
+import zipfile
+import io
+from datetime import datetime
 
 app = FastAPI()
 
@@ -151,6 +154,58 @@ async def delete_multiple(request: Request, selected_files: List[str] = Form(...
             redirect_url = "/"
 
         return RedirectResponse(url=redirect_url, status_code=303)
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.post("/download-multiple")
+async def download_multiple(selected_files: List[str] = Form(...)):
+    """Download multiple selected files/folders as a ZIP archive"""
+    try:
+        if not selected_files:
+            raise HTTPException(status_code=400, detail="No files selected")
+
+        # Create an in-memory ZIP file
+        zip_buffer = io.BytesIO()
+
+        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+            for file_path in selected_files:
+                target_path = STATICFILES_DIR / file_path
+                target_path = target_path.resolve()
+
+                # Security check
+                if not str(target_path).startswith(str(STATICFILES_DIR.resolve())):
+                    continue
+
+                if not target_path.exists():
+                    continue
+
+                # Add file or folder to ZIP
+                if target_path.is_file():
+                    # Add single file
+                    zip_file.write(target_path, arcname=file_path)
+                elif target_path.is_dir():
+                    # Add all files in directory recursively
+                    for item in target_path.rglob('*'):
+                        if item.is_file():
+                            arcname = str(item.relative_to(STATICFILES_DIR))
+                            zip_file.write(item, arcname=arcname)
+
+        # Prepare the ZIP for download
+        zip_buffer.seek(0)
+
+        # Generate filename with timestamp
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        filename = f"n8n_files_{timestamp}.zip"
+
+        return StreamingResponse(
+            io.BytesIO(zip_buffer.getvalue()),
+            media_type="application/zip",
+            headers={
+                "Content-Disposition": f"attachment; filename={filename}"
+            }
+        )
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))

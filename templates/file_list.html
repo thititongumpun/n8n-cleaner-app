@@ -34,6 +34,16 @@ content %}
     >
       🗑️ Delete Selected
     </button>
+
+    <!-- Download Selected Button -->
+    <button
+      id="downloadSelectedBtn"
+      onclick="downloadSelected()"
+      class="px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition disabled:bg-gray-400 disabled:cursor-not-allowed"
+      disabled
+    >
+      📥 Download Selected
+    </button>
   </div>
 
   <!-- File List -->
@@ -247,16 +257,22 @@ content %}
     updateDeleteButton();
   }
 
-  // Update delete button state
+  // Update delete and download button states
   function updateDeleteButton() {
     const checkboxes = document.querySelectorAll(".file-checkbox:checked");
     const deleteBtn = document.getElementById("deleteSelectedBtn");
-    deleteBtn.disabled = checkboxes.length === 0;
+    const downloadBtn = document.getElementById("downloadSelectedBtn");
+
+    const isDisabled = checkboxes.length === 0;
+    deleteBtn.disabled = isDisabled;
+    downloadBtn.disabled = isDisabled;
 
     if (checkboxes.length > 0) {
       deleteBtn.textContent = `🗑️ Delete Selected (${checkboxes.length})`;
+      downloadBtn.textContent = `📥 Download Selected (${checkboxes.length})`;
     } else {
       deleteBtn.textContent = "🗑️ Delete Selected";
+      downloadBtn.textContent = "📥 Download Selected";
     }
   }
 
@@ -300,6 +316,30 @@ content %}
     confirmBtn.onclick = function () {
       document.getElementById("deleteForm").submit();
     };
+  }
+
+  // Download selected items
+  function downloadSelected() {
+    const checkboxes = document.querySelectorAll(".file-checkbox:checked");
+    if (checkboxes.length === 0) return;
+
+    // Create a form to submit the download request
+    const form = document.createElement("form");
+    form.method = "POST";
+    form.action = "/download-multiple";
+
+    // Add each selected file as a form input
+    checkboxes.forEach((checkbox) => {
+      const input = document.createElement("input");
+      input.type = "hidden";
+      input.name = "selected_files";
+      input.value = checkbox.value;
+      form.appendChild(input);
+    });
+
+    document.body.appendChild(form);
+    form.submit();
+    document.body.removeChild(form);
   }
 
   // Close modal
