@@ -1,4 +1,5 @@
 from fastapi import FastAPI, Request, HTTPException, Form
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse, FileResponse, StreamingResponse, JSONResponse
@@ -11,6 +12,14 @@ from datetime import datetime
 
 app = FastAPI()
 
+# Configure CORS to allow all origins
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # Allow all origins
+    allow_credentials=True,
+    allow_methods=["*"],  # Allow all methods
+    allow_headers=["*"],  # Allow all headers
+)
 
 app.mount("/static", StaticFiles(directory="n8n_ffmpeg"), name="static")
 app.mount("/yt", StaticFiles(directory="yt"), name="yt")
