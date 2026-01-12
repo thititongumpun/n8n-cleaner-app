@@ -311,3 +311,94 @@ async def upload_file_to_yt(file: UploadFile = File(...)):
             "status": "error",
             "message": str(e)
         }, status_code=500)
+
+
+@app.get("/api/yt/files/{filename:path}")
+async def get_file_url(request: Request, filename: str):
+    """Get the URL for a file in the yt folder"""
+    try:
+        yt_dir = Path("yt")
+        target_path = yt_dir / filename
+        target_path = target_path.resolve()
+
+        # Security check - ensure path is within yt directory
+        if not str(target_path).startswith(str(yt_dir.resolve())):
+            return JSONResponse(content={
+                "status": "error",
+                "message": "Access denied"
+            }, status_code=403)
+
+        # Check if file exists
+        if not target_path.exists() or not target_path.is_file():
+            return JSONResponse(content={
+                "status": "error",
+                "message": "File not found"
+            }, status_code=404)
+
+        # Construct the URL
+        base_url = str(request.base_url).rstrip('/')
+        file_url = f"{base_url}/yt/{filename}"
+
+        # Get file info
+        file_size = target_path.stat().st_size
+
+        return JSONResponse(content={
+            "status": "success",
+            "file": {
+                "name": filename,
+                "url": file_url,
+                "size": file_size,
+                "size_kb": round(file_size / 1024, 2),
+                "size_mb": round(file_size / 1024 / 1024, 2)
+            }
+        })
+
+    except Exception as e:
+        return JSONResponse(content={
+            "status": "error",
+            "message": str(e)
+        }, status_code=500)
+
+
+@app.delete("/api/yt/files/{filename:path}")
+async def delete_file_from_yt(filename: str):
+    """Delete a file from the yt folder"""
+    try:
+        yt_dir = Path("yt")
+        target_path = yt_dir / filename
+        target_path = target_path.resolve()
+
+        # Security check - ensure path is within yt directory
+        if not str(target_path).startswith(str(yt_dir.resolve())):
+            return JSONResponse(content={
+                "status": "error",
+                "message": "Access denied"
+            }, status_code=403)
+
+        # Check if file exists
+        if not target_path.exists():
+            return JSONResponse(content={
+                "status": "error",
+                "message": "File not found"
+            }, status_code=404)
+
+        # Only delete files, not directories
+        if not target_path.is_file():
+            return JSONResponse(content={
+                "status": "error",
+                "message": "Cannot delete directories"
+            }, status_code=400)
+
+        # Delete the file
+        target_path.unlink()
+
+        return JSONResponse(content={
+            "status": "success",
+            "message": f"File '{filename}' deleted successfully"
+        })
+
+    except Exception as e:
+        return JSONResponse(content={
+            "status": "error",
+            "message": str(e)
+        }, status_code=500)
