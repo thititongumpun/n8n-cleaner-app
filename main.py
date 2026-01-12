@@ -1,4 +1,4 @@
-from fastapi import FastAPI, Request, HTTPException, Form
+from fastapi import FastAPI, Request, HTTPException, Form, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
@@ -265,4 +265,49 @@ async def list_yt_files():
             "status": "error",
             "message": str(e),
             "files": []
+        }, status_code=500)
+
+
+@app.post("/api/yt/files")
+async def upload_file_to_yt(file: UploadFile = File(...)):
+    """Upload a file to the yt folder"""
+    try:
+        yt_dir = Path("yt")
+
+        # Create yt folder if it doesn't exist
+        yt_dir.mkdir(exist_ok=True)
+
+        # Validate filename
+        if not file.filename:
+            return JSONResponse(content={
+                "status": "error",
+                "message": "No filename provided"
+            }, status_code=400)
+
+        # Create target file path
+        target_path = yt_dir / file.filename
+
+        # Write file to disk
+        with open(target_path, "wb") as buffer:
+            content = await file.read()
+            buffer.write(content)
+
+        # Get file info
+        file_size = target_path.stat().st_size
+
+        return JSONResponse(content={
+            "status": "success",
+            "message": "File uploaded successfully",
+            "file": {
+                "name": file.filename,
+                "size": file_size,
+                "size_kb": round(file_size / 1024, 2),
+                "size_mb": round(file_size / 1024 / 1024, 2)
+            }
+        }, status_code=201)
+
+    except Exception as e:
+        return JSONResponse(content={
+            "status": "error",
+            "message": str(e)
         }, status_code=500)
