@@ -1,7 +1,7 @@
 from fastapi import FastAPI, Request, HTTPException, Form
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import RedirectResponse, FileResponse, StreamingResponse
+from fastapi.responses import RedirectResponse, FileResponse, StreamingResponse, JSONResponse
 from pathlib import Path
 from typing import List
 import shutil
@@ -13,6 +13,7 @@ app = FastAPI()
 
 
 app.mount("/static", StaticFiles(directory="n8n_ffmpeg"), name="static")
+app.mount("/yt", StaticFiles(directory="yt"), name="yt")
 
 
 templates = Jinja2Templates(directory="templates")
@@ -209,3 +210,50 @@ async def download_multiple(selected_files: List[str] = Form(...)):
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
+
+
+@app.get("/api/yt/files")
+async def list_yt_files():
+    """List all files in yt folder and return as JSON"""
+    try:
+        yt_dir = Path("yt")
+
+        if not yt_dir.exists():
+            return JSONResponse(content={
+                "status": "error",
+                "message": "yt folder not found",
+                "files": []
+            }, status_code=404)
+
+        files = []
+
+        # Recursively get all files in yt folder
+        for item in yt_dir.rglob('*'):
+            if item.is_file():
+                # Get relative path from yt folder
+                relative_path = str(item.relative_to(yt_dir))
+                size_bytes = item.stat().st_size
+
+                files.append({
+                    # Convert Windows paths to forward slash
+                    "name": relative_path.replace("\\", "/"),
+                    "size": size_bytes,
+                    "size_kb": round(size_bytes / 1024, 2),
+                    "size_mb": round(size_bytes / 1024 / 1024, 2)
+                })
+
+        # Sort by name
+        files.sort(key=lambda x: x["name"])
+
+        return JSONResponse(content={
+            "status": "success",
+            "total_files": len(files),
+            "files": files
+        })
+
+    except Exception as e:
+        return JSONResponse(content={
+            "status": "error",
+            "message": str(e),
+            "files": []
+        }, status_code=500)
