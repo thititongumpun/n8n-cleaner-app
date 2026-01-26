@@ -22,9 +22,10 @@ RUN uv sync --frozen --no-cache
 # Runtime stage
 FROM python:3.14-slim
 
-# Install only runtime dependencies
+# Install runtime dependencies including ffmpeg
 RUN apt-get update && apt-get install -y \
     libssl3 \
+    ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy uv
