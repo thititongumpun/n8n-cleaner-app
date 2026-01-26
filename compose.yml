@@ -1,11 +1,11 @@
 services:
   n8n-cleaner-app:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: thititongumpun/n8n-cleaner-app:latest
     container_name: n8n-cleaner-app
     ports:
-      - "8000:80"
+      - "8989:80"
+    environment:
+      TZ: Asia/Bangkok
     volumes:
       - ./n8n_ffmpeg:/app/n8n_ffmpeg
       - ./yt:/app/yt

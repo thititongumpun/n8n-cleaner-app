@@ -4,13 +4,63 @@ from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import RedirectResponse, FileResponse, StreamingResponse, JSONResponse
 from pathlib import Path
-from typing import List
+from typing import List, Optional
 import shutil
 import zipfile
 import io
-from datetime import datetime
+from datetime import datetime, timedelta
+import re
+import ffmpeg
+import tempfile
+import asyncio
+from concurrent.futures import ThreadPoolExecutor
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+from apscheduler.triggers.cron import CronTrigger
+import logging
+from contextlib import asynccontextmanager
 
-app = FastAPI()
+# Configure logging
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+)
+logger = logging.getLogger(__name__)
+
+# Initialize APScheduler
+scheduler = AsyncIOScheduler()
+
+# Thread pool for running ffmpeg in background
+executor = ThreadPoolExecutor(max_workers=2)
+
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """
+    Lifespan context manager for FastAPI application.
+    Handles startup and shutdown events.
+    """
+    # Startup: Start the scheduler
+    scheduler.add_job(
+        merge_yesterday_videos_job,
+        trigger=CronTrigger(hour=0, minute=0),  # Run at 00:00 every day
+        id="merge_yesterday_videos",
+        name="Merge Yesterday's Videos",
+        replace_existing=True
+    )
+
+    scheduler.start()
+    logger.info(
+        "🚀 Scheduler started - Video merge job will run daily at midnight (00:00)")
+
+    yield  # Application is running
+
+    # Shutdown: Stop the scheduler
+    scheduler.shutdown()
+    logger.info("🛑 Scheduler stopped")
+
+
+# Create FastAPI app with lifespan
+app = FastAPI(lifespan=lifespan)
 
 # Configure CORS to allow all origins
 app.add_middleware(
@@ -28,6 +78,74 @@ app.mount("/yt", StaticFiles(directory="yt"), name="yt")
 templates = Jinja2Templates(directory="templates")
 
 STATICFILES_DIR = Path("n8n_ffmpeg")
+
+
+# Scheduled job function
+async def merge_yesterday_videos_job():
+    """
+    Scheduled job that runs at midnight to merge yesterday's videos.
+    This is the same logic as the API endpoint but runs automatically.
+    """
+    try:
+        logger.info("Starting scheduled video merge job...")
+
+        # Use current date (will be called at midnight, so yesterday is the previous day)
+        current_date = datetime.now()
+        yesterday = current_date - timedelta(days=1)
+        yesterday_str = yesterday.strftime("%Y-%m-%d")
+
+        # Pattern to match date in filename (YYYY-MM-DD)
+        date_pattern = re.compile(r'(\d{4}-\d{2}-\d{2})')
+
+        # Get all video files from yesterday
+        if not STATICFILES_DIR.exists():
+            logger.error("n8n_ffmpeg folder not found")
+            return
+
+        video_files = []
+        video_extensions = {'.mp4', '.avi', '.mov',
+                            '.mkv', '.flv', '.wmv', '.webm'}
+
+        # Find all video files from yesterday
+        for item in STATICFILES_DIR.rglob('*'):
+            if item.is_file() and item.suffix.lower() in video_extensions:
+                match = date_pattern.search(item.name)
+                if match and match.group(1) == yesterday_str:
+                    video_files.append(item)
+
+        if not video_files:
+            logger.warning(f"No video files found for {yesterday_str}")
+            return
+
+        # Sort files by name to ensure consistent order
+        video_files.sort(key=lambda x: x.name)
+
+        logger.info(
+            f"Found {len(video_files)} videos to merge for {yesterday_str}")
+
+        # Generate output filename
+        output_filename = f"hotnews_{yesterday_str}.mp4"
+        output_path = STATICFILES_DIR / output_filename
+
+        # Run ffmpeg merge in thread pool
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            executor,
+            merge_videos_sync,
+            video_files,
+            output_path
+        )
+
+        if result["status"] == "success":
+            logger.info(
+                f"✅ Successfully merged {len(video_files)} videos into {output_filename}")
+            logger.info(f"   Output size: {result['output_size_mb']} MB")
+        else:
+            logger.error(f"❌ Failed to merge videos: {result['message']}")
+
+    except Exception as e:
+        logger.error(
+            f"❌ Error in scheduled merge job: {str(e)}", exc_info=True)
 
 
 @app.get("/")
@@ -396,6 +514,259 @@ async def delete_file_from_yt(filename: str):
             "status": "success",
             "message": f"File '{filename}' deleted successfully"
         })
+
+    except Exception as e:
+        return JSONResponse(content={
+            "status": "error",
+            "message": str(e)
+        }, status_code=500)
+
+
+@app.get("/api/files/yesterday")
+async def get_yesterday_files(date_now: Optional[str] = None):
+    """
+    Get all files from n8n_ffmpeg folder that have yesterday's date in their filename.
+
+    Args:
+        date_now: Optional date string in format YYYY-MM-DD (defaults to today)
+
+    Returns:
+        JSON response with list of files from yesterday
+
+    Example filenames:
+        - news_2026-01-26_13-00-22.mp4
+        - sanook_news_2026-01-26_09-05-24.mp4
+        - sports_news_2026-01-26_09-03-22.mp4
+    """
+    try:
+        # Parse the current date or use today
+        if date_now:
+            try:
+                current_date = datetime.strptime(date_now, "%Y-%m-%d")
+            except ValueError:
+                return JSONResponse(content={
+                    "status": "error",
+                    "message": "Invalid date format. Use YYYY-MM-DD"
+                }, status_code=400)
+        else:
+            current_date = datetime.now()
+
+        # Calculate yesterday's date
+        yesterday = current_date - timedelta(days=1)
+        yesterday_str = yesterday.strftime("%Y-%m-%d")
+
+        # Pattern to match date in filename (YYYY-MM-DD)
+        date_pattern = re.compile(r'(\d{4}-\d{2}-\d{2})')
+
+        # Get all files from n8n_ffmpeg folder
+        if not STATICFILES_DIR.exists():
+            return JSONResponse(content={
+                "status": "error",
+                "message": "n8n_ffmpeg folder not found",
+                "files": []
+            }, status_code=404)
+
+        yesterday_files = []
+
+        # Recursively search for files
+        for item in STATICFILES_DIR.rglob('*'):
+            if item.is_file():
+                # Extract date from filename
+                match = date_pattern.search(item.name)
+                if match:
+                    file_date = match.group(1)
+
+                    # Check if the date matches yesterday
+                    if file_date == yesterday_str:
+                        relative_path = str(item.relative_to(STATICFILES_DIR))
+                        file_size = item.stat().st_size
+
+                        yesterday_files.append({
+                            "name": item.name,
+                            "path": relative_path.replace("\\", "/"),
+                            "date": file_date,
+                            "size": file_size,
+                            "size_kb": round(file_size / 1024, 2),
+                            "size_mb": round(file_size / 1024 / 1024, 2),
+                            "modified": datetime.fromtimestamp(item.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
+                        })
+
+        # Sort by filename
+        yesterday_files.sort(key=lambda x: x["name"])
+
+        return JSONResponse(content={
+            "status": "success",
+            "current_date": current_date.strftime("%Y-%m-%d"),
+            "yesterday_date": yesterday_str,
+            "total_files": len(yesterday_files),
+            "files": yesterday_files
+        })
+
+    except Exception as e:
+        return JSONResponse(content={
+            "status": "error",
+            "message": str(e),
+            "files": []
+        }, status_code=500)
+
+
+# Thread pool for running ffmpeg in background
+executor = ThreadPoolExecutor(max_workers=2)
+
+
+def merge_videos_sync(video_files: List[Path], output_path: Path) -> dict:
+    """
+    Synchronous function to merge multiple video files using ffmpeg.
+    This will be run in a thread pool to avoid blocking the async event loop.
+
+    Args:
+        video_files: List of video file paths to merge
+        output_path: Path where the merged video will be saved
+
+    Returns:
+        dict with status and message
+    """
+    try:
+        # Create a temporary file list for ffmpeg concat
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
+            concat_file = f.name
+            for video_file in video_files:
+                # Write absolute path with forward slashes and escape special characters
+                file_path = str(video_file.absolute()).replace('\\', '/')
+                f.write(f"file '{file_path}'\n")
+
+        try:
+            # Use ffmpeg concat demuxer to merge videos
+            # This is the fastest method and works well for files with same codec
+            (
+                ffmpeg
+                .input(concat_file, format='concat', safe=0)
+                .output(
+                    str(output_path),
+                    c='copy',  # Copy codec without re-encoding (fast)
+                    loglevel='error'
+                )
+                .overwrite_output()
+                .run(capture_stdout=True, capture_stderr=True)
+            )
+
+            return {
+                "status": "success",
+                "message": f"Successfully merged {len(video_files)} videos",
+                "output_file": output_path.name,
+                "output_size": output_path.stat().st_size,
+                "output_size_mb": round(output_path.stat().st_size / 1024 / 1024, 2)
+            }
+
+        finally:
+            # Clean up temporary concat file
+            Path(concat_file).unlink(missing_ok=True)
+
+    except ffmpeg.Error as e:
+        error_message = e.stderr.decode() if e.stderr else str(e)
+        return {
+            "status": "error",
+            "message": f"FFmpeg error: {error_message}"
+        }
+    except Exception as e:
+        return {
+            "status": "error",
+            "message": f"Unexpected error: {str(e)}"
+        }
+
+
+@app.get("/api/files/merge-yesterday")
+async def merge_yesterday_videos(date_now: Optional[str] = None):
+    """
+    Merge all video files from yesterday into a single video file.
+
+    Args:
+        date_now: Optional date string in format YYYY-MM-DD (defaults to today)
+
+    Returns:
+        JSON response with merge status and output file info
+
+    Note:
+        - Videos will be merged in alphabetical order by filename
+        - Output file will be saved as: merged_YYYY-MM-DD_HHMMSS.mp4
+        - This uses ffmpeg concat demuxer with codec copy (no re-encoding)
+    """
+    try:
+        # Parse the current date or use today
+        if date_now:
+            try:
+                current_date = datetime.strptime(date_now, "%Y-%m-%d")
+            except ValueError:
+                return JSONResponse(content={
+                    "status": "error",
+                    "message": "Invalid date format. Use YYYY-MM-DD"
+                }, status_code=400)
+        else:
+            current_date = datetime.now()
+
+        # Calculate yesterday's date
+        yesterday = current_date - timedelta(days=1)
+        yesterday_str = yesterday.strftime("%Y-%m-%d")
+
+        # Pattern to match date in filename (YYYY-MM-DD)
+        date_pattern = re.compile(r'(\d{4}-\d{2}-\d{2})')
+
+        # Get all video files from yesterday
+        if not STATICFILES_DIR.exists():
+            return JSONResponse(content={
+                "status": "error",
+                "message": "n8n_ffmpeg folder not found"
+            }, status_code=404)
+
+        video_files = []
+        video_extensions = {'.mp4', '.avi', '.mov',
+                            '.mkv', '.flv', '.wmv', '.webm'}
+
+        # Find all video files from yesterday
+        for item in STATICFILES_DIR.rglob('*'):
+            if item.is_file() and item.suffix.lower() in video_extensions:
+                match = date_pattern.search(item.name)
+                if match and match.group(1) == yesterday_str:
+                    video_files.append(item)
+
+        if not video_files:
+            return JSONResponse(content={
+                "status": "error",
+                "message": f"No video files found for {yesterday_str}"
+            }, status_code=404)
+
+        # Sort files by name to ensure consistent order
+        video_files.sort(key=lambda x: x.name)
+
+        output_filename = f"hotnews_{yesterday_str}.mp4"
+        output_path = STATICFILES_DIR / output_filename
+
+        # Run ffmpeg merge in thread pool to avoid blocking
+        loop = asyncio.get_event_loop()
+        result = await loop.run_in_executor(
+            executor,
+            merge_videos_sync,
+            video_files,
+            output_path
+        )
+
+        if result["status"] == "success":
+            return JSONResponse(content={
+                "status": "success",
+                "message": result["message"],
+                "yesterday_date": yesterday_str,
+                "input_files": [f.name for f in video_files],
+                "total_input_files": len(video_files),
+                "output_file": result["output_file"],
+                "output_size": result["output_size"],
+                "output_size_mb": result["output_size_mb"],
+                "output_url": f"/static/{result['output_file']}"
+            })
+        else:
+            return JSONResponse(content={
+                "status": "error",
+                "message": result["message"]
+            }, status_code=500)
 
     except Exception as e:
         return JSONResponse(content={
