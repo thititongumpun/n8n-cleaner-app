@@ -636,14 +636,23 @@ def merge_videos_sync(video_files: List[Path], output_path: Path) -> dict:
                 f.write(f"file '{file_path}'\n")
 
         try:
-            # Use ffmpeg concat demuxer to merge videos
-            # This is the fastest method and works well for files with same codec
+            # Use ffmpeg to merge and convert videos to 1920x1080 landscape
+            # Scale vertical videos (1080x1920) to horizontal (1920x1080) with black bars
             (
                 ffmpeg
                 .input(concat_file, format='concat', safe=0)
                 .output(
                     str(output_path),
-                    c='copy',  # Copy codec without re-encoding (fast)
+                    vf='scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black',
+                    # Video codec settings
+                    vcodec='libx264',
+                    # Encoding speed (ultrafast, fast, medium, slow)
+                    preset='medium',
+                    crf=23,  # Quality (18-28, lower = better quality)
+                    # Audio codec settings
+                    acodec='aac',
+                    audio_bitrate='128k',
+                    # Other settings
                     loglevel='error'
                 )
                 .overwrite_output()
