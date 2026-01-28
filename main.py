@@ -689,10 +689,10 @@ def merge_videos_sync(video_files: List[Path], output_path: Path) -> dict:
         return {"status": "error", "message": f"Unexpected error: {str(e)}"}
 
 
-@app.get("/api/files/merge-yesterday")
-async def merge_yesterday_videos(date_now: Optional[str] = None):
+@app.get("/api/files/merge-today")
+async def merge_today_videos(date_now: Optional[str] = None):
     """
-    Merge all video files from yesterday into a single video file.
+    Merge all video files from today into a single video file.
 
     Args:
         date_now: Optional date string in format YYYY-MM-DD (defaults to today)
@@ -702,8 +702,8 @@ async def merge_yesterday_videos(date_now: Optional[str] = None):
 
     Note:
         - Videos will be merged in alphabetical order by filename
-        - Output file will be saved as: merged_YYYY-MM-DD_HHMMSS.mp4
-        - This uses ffmpeg concat demuxer with codec copy (no re-encoding)
+        - Output file will be saved as: YYYY-MM-DD.mp4
+        - This uses ffmpeg to merge and convert videos to 1920x1080 landscape
     """
     try:
         # Parse the current date or use today
@@ -721,14 +721,13 @@ async def merge_yesterday_videos(date_now: Optional[str] = None):
         else:
             current_date = datetime.now()
 
-        # Calculate yesterday's date
-        yesterday = current_date - timedelta(days=1)
-        yesterday_str = yesterday.strftime("%Y-%m-%d")
+        # Use today's date
+        today_str = current_date.strftime("%Y-%m-%d")
 
         # Pattern to match date in filename (YYYY-MM-DD)
         date_pattern = re.compile(r"(\d{4}-\d{2}-\d{2})")
 
-        # Get all video files from yesterday
+        # Get all video files from today
         if not STATICFILES_DIR.exists():
             return JSONResponse(
                 content={"status": "error", "message": "n8n_ffmpeg folder not found"},
@@ -738,18 +737,18 @@ async def merge_yesterday_videos(date_now: Optional[str] = None):
         video_files = []
         video_extensions = {".mp4", ".avi", ".mov", ".mkv", ".flv", ".wmv", ".webm"}
 
-        # Find all video files from yesterday
+        # Find all video files from today
         for item in STATICFILES_DIR.rglob("*"):
             if item.is_file() and item.suffix.lower() in video_extensions:
                 match = date_pattern.search(item.name)
-                if match and match.group(1) == yesterday_str:
+                if match and match.group(1) == today_str:
                     video_files.append(item)
 
         if not video_files:
             return JSONResponse(
                 content={
                     "status": "error",
-                    "message": f"No video files found for {yesterday_str}",
+                    "message": f"No video files found for {today_str}",
                 },
                 status_code=404,
             )
@@ -757,7 +756,7 @@ async def merge_yesterday_videos(date_now: Optional[str] = None):
         # Sort files by name to ensure consistent order
         video_files.sort(key=lambda x: x.name)
 
-        output_filename = f"hotnews_{yesterday_str}.mp4"
+        output_filename = f"{today_str}.mp4"
         output_path = STATICFILES_DIR / output_filename
 
         # Run ffmpeg merge in thread pool to avoid blocking
@@ -771,7 +770,7 @@ async def merge_yesterday_videos(date_now: Optional[str] = None):
                 content={
                     "status": "success",
                     "message": result["message"],
-                    "yesterday_date": yesterday_str,
+                    "today_date": today_str,
                     "input_files": [f.name for f in video_files],
                     "total_input_files": len(video_files),
                     "output_file": result["output_file"],
