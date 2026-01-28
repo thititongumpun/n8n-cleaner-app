@@ -120,7 +120,7 @@ async def merge_today_videos_job():
         logger.info(f"Found {len(video_files)} videos to merge for {today_str}")
 
         # Generate output filename
-        output_filename = f"{today_str}.mp4"
+        output_filename = f"hotnews_{today_str}.mp4"
         output_path = STATICFILES_DIR / output_filename
 
         # Try FAST merge first (codec copy - no re-encoding)
@@ -771,7 +771,7 @@ async def merge_today_videos(date_now: Optional[str] = None):
         # Sort files by name to ensure consistent order
         video_files.sort(key=lambda x: x.name)
 
-        output_filename = f"{today_str}.mp4"
+        output_filename = f"hotnews_{today_str}.mp4"
         output_path = STATICFILES_DIR / output_filename
 
         # Try FAST merge first (codec copy - no re-encoding)
