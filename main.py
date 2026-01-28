@@ -2,7 +2,7 @@ from fastapi import FastAPI, Request, HTTPException, Form, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.templating import Jinja2Templates
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import RedirectResponse, FileResponse, StreamingResponse, JSONResponse
+from fastapi.responses import RedirectResponse, StreamingResponse, JSONResponse
 from pathlib import Path
 from typing import List, Optional
 import shutil
@@ -21,8 +21,7 @@ from contextlib import asynccontextmanager
 
 # Configure logging
 logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    level=logging.INFO, format="%(asctime)s - %(name)s - %(levelname)s - %(message)s"
 )
 logger = logging.getLogger(__name__)
 
@@ -41,16 +40,15 @@ async def lifespan(app: FastAPI):
     """
     # Startup: Start the scheduler
     scheduler.add_job(
-        merge_yesterday_videos_job,
-        trigger=CronTrigger(hour=0, minute=0),  # Run at 00:00 every day
-        id="merge_yesterday_videos",
-        name="Merge Yesterday's Videos",
-        replace_existing=True
+        merge_today_videos_job,
+        trigger=CronTrigger(hour=18, minute=0),  # Run at 18:00 (6 PM) every day
+        id="merge_today_videos",
+        name="Merge Today's Videos",
+        replace_existing=True,
     )
 
     scheduler.start()
-    logger.info(
-        "🚀 Scheduler started - Video merge job will run daily at midnight (00:00)")
+    logger.info("🚀 Scheduler started - Video merge job will run daily at 6 PM (18:00)")
 
     yield  # Application is running
 
@@ -81,88 +79,85 @@ STATICFILES_DIR = Path("n8n_ffmpeg")
 
 
 # Scheduled job function
-async def merge_yesterday_videos_job():
+async def merge_today_videos_job():
     """
-    Scheduled job that runs at midnight to merge yesterday's videos.
+    Scheduled job that runs at 6 PM to merge today's videos.
     This is the same logic as the API endpoint but runs automatically.
     """
     try:
         logger.info("Starting scheduled video merge job...")
 
-        # Use current date (will be called at midnight, so yesterday is the previous day)
+        # Use current date (will be called at 6 PM to merge today's videos)
         current_date = datetime.now()
-        yesterday = current_date - timedelta(days=1)
-        yesterday_str = yesterday.strftime("%Y-%m-%d")
+        today_str = current_date.strftime("%Y-%m-%d")
 
         # Pattern to match date in filename (YYYY-MM-DD)
-        date_pattern = re.compile(r'(\d{4}-\d{2}-\d{2})')
+        date_pattern = re.compile(r"(\d{4}-\d{2}-\d{2})")
 
-        # Get all video files from yesterday
+        # Get all video files from today
         if not STATICFILES_DIR.exists():
             logger.error("n8n_ffmpeg folder not found")
             return
 
         video_files = []
-        video_extensions = {'.mp4', '.avi', '.mov',
-                            '.mkv', '.flv', '.wmv', '.webm'}
+        video_extensions = {".mp4", ".avi", ".mov", ".mkv", ".flv", ".wmv", ".webm"}
 
-        # Find all video files from yesterday
-        for item in STATICFILES_DIR.rglob('*'):
+        # Find all video files from today
+        for item in STATICFILES_DIR.rglob("*"):
             if item.is_file() and item.suffix.lower() in video_extensions:
                 match = date_pattern.search(item.name)
-                if match and match.group(1) == yesterday_str:
+                if match and match.group(1) == today_str:
                     video_files.append(item)
 
         if not video_files:
-            logger.warning(f"No video files found for {yesterday_str}")
+            logger.warning(f"No video files found for {today_str}")
             return
 
         # Sort files by name to ensure consistent order
         video_files.sort(key=lambda x: x.name)
 
-        logger.info(
-            f"Found {len(video_files)} videos to merge for {yesterday_str}")
+        logger.info(f"Found {len(video_files)} videos to merge for {today_str}")
 
         # Generate output filename
-        output_filename = f"hotnews_{yesterday_str}.mp4"
+        output_filename = f"{today_str}.mp4"
         output_path = STATICFILES_DIR / output_filename
 
         # Run ffmpeg merge in thread pool
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
-            executor,
-            merge_videos_sync,
-            video_files,
-            output_path
+            executor, merge_videos_sync, video_files, output_path
         )
 
         if result["status"] == "success":
             logger.info(
-                f"✅ Successfully merged {len(video_files)} videos into {output_filename}")
+                f"✅ Successfully merged {len(video_files)} videos into {output_filename}"
+            )
             logger.info(f"   Output size: {result['output_size_mb']} MB")
         else:
             logger.error(f"❌ Failed to merge videos: {result['message']}")
 
     except Exception as e:
-        logger.error(
-            f"❌ Error in scheduled merge job: {str(e)}", exc_info=True)
+        logger.error(f"❌ Error in scheduled merge job: {str(e)}", exc_info=True)
 
 
 @app.get("/")
 async def home(request: Request):
     """Home page with file listing"""
     try:
-
         items = []
         if STATICFILES_DIR.exists():
             for item in STATICFILES_DIR.iterdir():
-                items.append({
-                    "name": item.name,
-                    "type": "📁" if item.is_dir() else "📄",
-                    "is_dir": item.is_dir(),
-                    "size": f"{item.stat().st_size / 1024:.2f} KB" if item.is_file() else "-",
-                    "path": item.name
-                })
+                items.append(
+                    {
+                        "name": item.name,
+                        "type": "📁" if item.is_dir() else "📄",
+                        "is_dir": item.is_dir(),
+                        "size": f"{item.stat().st_size / 1024:.2f} KB"
+                        if item.is_file()
+                        else "-",
+                        "path": item.name,
+                    }
+                )
 
         return templates.TemplateResponse(
             "file_list.html",
@@ -170,8 +165,8 @@ async def home(request: Request):
                 "request": request,
                 "items": sorted(items, key=lambda x: (not x["is_dir"], x["name"])),
                 "title": "Static Files Browser",
-                "current_path": None
-            }
+                "current_path": None,
+            },
         )
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
@@ -192,13 +187,17 @@ async def browse_folder(request: Request, path: str):
 
         items = []
         for item in target_path.iterdir():
-            items.append({
-                "name": item.name,
-                "type": "📁" if item.is_dir() else "📄",
-                "is_dir": item.is_dir(),
-                "size": f"{item.stat().st_size / 1024:.2f} KB" if item.is_file() else "-",
-                "path": str(item.relative_to(STATICFILES_DIR))
-            })
+            items.append(
+                {
+                    "name": item.name,
+                    "type": "📁" if item.is_dir() else "📄",
+                    "is_dir": item.is_dir(),
+                    "size": f"{item.stat().st_size / 1024:.2f} KB"
+                    if item.is_file()
+                    else "-",
+                    "path": str(item.relative_to(STATICFILES_DIR)),
+                }
+            )
 
         return templates.TemplateResponse(
             "file_list.html",
@@ -206,8 +205,8 @@ async def browse_folder(request: Request, path: str):
                 "request": request,
                 "items": sorted(items, key=lambda x: (not x["is_dir"], x["name"])),
                 "title": f"Browsing: {path}",
-                "current_path": path
-            }
+                "current_path": path,
+            },
         )
     except HTTPException:
         raise
@@ -297,7 +296,7 @@ async def download_multiple(selected_files: List[str] = Form(...)):
         # Create an in-memory ZIP file
         zip_buffer = io.BytesIO()
 
-        with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+        with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
             for file_path in selected_files:
                 target_path = STATICFILES_DIR / file_path
                 target_path = target_path.resolve()
@@ -315,7 +314,7 @@ async def download_multiple(selected_files: List[str] = Form(...)):
                     zip_file.write(target_path, arcname=file_path)
                 elif target_path.is_dir():
                     # Add all files in directory recursively
-                    for item in target_path.rglob('*'):
+                    for item in target_path.rglob("*"):
                         if item.is_file():
                             arcname = str(item.relative_to(STATICFILES_DIR))
                             zip_file.write(item, arcname=arcname)
@@ -330,9 +329,7 @@ async def download_multiple(selected_files: List[str] = Form(...)):
         return StreamingResponse(
             io.BytesIO(zip_buffer.getvalue()),
             media_type="application/zip",
-            headers={
-                "Content-Disposition": f"attachment; filename={filename}"
-            }
+            headers={"Content-Disposition": f"attachment; filename={filename}"},
         )
 
     except Exception as e:
@@ -346,44 +343,45 @@ async def list_yt_files():
         yt_dir = Path("yt")
 
         if not yt_dir.exists():
-            return JSONResponse(content={
-                "status": "error",
-                "message": "yt folder not found",
-                "files": []
-            }, status_code=404)
+            return JSONResponse(
+                content={
+                    "status": "error",
+                    "message": "yt folder not found",
+                    "files": [],
+                },
+                status_code=404,
+            )
 
         files = []
 
         # Recursively get all files in yt folder
-        for item in yt_dir.rglob('*'):
+        for item in yt_dir.rglob("*"):
             if item.is_file():
                 # Get relative path from yt folder
                 relative_path = str(item.relative_to(yt_dir))
                 size_bytes = item.stat().st_size
 
-                files.append({
-                    # Convert Windows paths to forward slash
-                    "name": relative_path.replace("\\", "/"),
-                    "size": size_bytes,
-                    "size_kb": round(size_bytes / 1024, 2),
-                    "size_mb": round(size_bytes / 1024 / 1024, 2)
-                })
+                files.append(
+                    {
+                        # Convert Windows paths to forward slash
+                        "name": relative_path.replace("\\", "/"),
+                        "size": size_bytes,
+                        "size_kb": round(size_bytes / 1024, 2),
+                        "size_mb": round(size_bytes / 1024 / 1024, 2),
+                    }
+                )
 
         # Sort by name
         files.sort(key=lambda x: x["name"])
 
-        return JSONResponse(content={
-            "status": "success",
-            "total_files": len(files),
-            "files": files
-        })
+        return JSONResponse(
+            content={"status": "success", "total_files": len(files), "files": files}
+        )
 
     except Exception as e:
-        return JSONResponse(content={
-            "status": "error",
-            "message": str(e),
-            "files": []
-        }, status_code=500)
+        return JSONResponse(
+            content={"status": "error", "message": str(e), "files": []}, status_code=500
+        )
 
 
 @app.post("/api/yt/files")
@@ -397,10 +395,10 @@ async def upload_file_to_yt(file: UploadFile = File(...)):
 
         # Validate filename
         if not file.filename:
-            return JSONResponse(content={
-                "status": "error",
-                "message": "No filename provided"
-            }, status_code=400)
+            return JSONResponse(
+                content={"status": "error", "message": "No filename provided"},
+                status_code=400,
+            )
 
         # Create target file path
         target_path = yt_dir / file.filename
@@ -413,22 +411,24 @@ async def upload_file_to_yt(file: UploadFile = File(...)):
         # Get file info
         file_size = target_path.stat().st_size
 
-        return JSONResponse(content={
-            "status": "success",
-            "message": "File uploaded successfully",
-            "file": {
-                "name": file.filename,
-                "size": file_size,
-                "size_kb": round(file_size / 1024, 2),
-                "size_mb": round(file_size / 1024 / 1024, 2)
-            }
-        }, status_code=201)
+        return JSONResponse(
+            content={
+                "status": "success",
+                "message": "File uploaded successfully",
+                "file": {
+                    "name": file.filename,
+                    "size": file_size,
+                    "size_kb": round(file_size / 1024, 2),
+                    "size_mb": round(file_size / 1024 / 1024, 2),
+                },
+            },
+            status_code=201,
+        )
 
     except Exception as e:
-        return JSONResponse(content={
-            "status": "error",
-            "message": str(e)
-        }, status_code=500)
+        return JSONResponse(
+            content={"status": "error", "message": str(e)}, status_code=500
+        )
 
 
 @app.get("/api/yt/files/{filename:path}")
@@ -441,41 +441,41 @@ async def get_file_url(request: Request, filename: str):
 
         # Security check - ensure path is within yt directory
         if not str(target_path).startswith(str(yt_dir.resolve())):
-            return JSONResponse(content={
-                "status": "error",
-                "message": "Access denied"
-            }, status_code=403)
+            return JSONResponse(
+                content={"status": "error", "message": "Access denied"}, status_code=403
+            )
 
         # Check if file exists
         if not target_path.exists() or not target_path.is_file():
-            return JSONResponse(content={
-                "status": "error",
-                "message": "File not found"
-            }, status_code=404)
+            return JSONResponse(
+                content={"status": "error", "message": "File not found"},
+                status_code=404,
+            )
 
         # Construct the URL
-        base_url = str(request.base_url).rstrip('/')
+        base_url = str(request.base_url).rstrip("/")
         file_url = f"{base_url}/yt/{filename}"
 
         # Get file info
         file_size = target_path.stat().st_size
 
-        return JSONResponse(content={
-            "status": "success",
-            "file": {
-                "name": filename,
-                "url": file_url,
-                "size": file_size,
-                "size_kb": round(file_size / 1024, 2),
-                "size_mb": round(file_size / 1024 / 1024, 2)
+        return JSONResponse(
+            content={
+                "status": "success",
+                "file": {
+                    "name": filename,
+                    "url": file_url,
+                    "size": file_size,
+                    "size_kb": round(file_size / 1024, 2),
+                    "size_mb": round(file_size / 1024 / 1024, 2),
+                },
             }
-        })
+        )
 
     except Exception as e:
-        return JSONResponse(content={
-            "status": "error",
-            "message": str(e)
-        }, status_code=500)
+        return JSONResponse(
+            content={"status": "error", "message": str(e)}, status_code=500
+        )
 
 
 @app.delete("/api/yt/files/{filename:path}")
@@ -488,38 +488,38 @@ async def delete_file_from_yt(filename: str):
 
         # Security check - ensure path is within yt directory
         if not str(target_path).startswith(str(yt_dir.resolve())):
-            return JSONResponse(content={
-                "status": "error",
-                "message": "Access denied"
-            }, status_code=403)
+            return JSONResponse(
+                content={"status": "error", "message": "Access denied"}, status_code=403
+            )
 
         # Check if file exists
         if not target_path.exists():
-            return JSONResponse(content={
-                "status": "error",
-                "message": "File not found"
-            }, status_code=404)
+            return JSONResponse(
+                content={"status": "error", "message": "File not found"},
+                status_code=404,
+            )
 
         # Only delete files, not directories
         if not target_path.is_file():
-            return JSONResponse(content={
-                "status": "error",
-                "message": "Cannot delete directories"
-            }, status_code=400)
+            return JSONResponse(
+                content={"status": "error", "message": "Cannot delete directories"},
+                status_code=400,
+            )
 
         # Delete the file
         target_path.unlink()
 
-        return JSONResponse(content={
-            "status": "success",
-            "message": f"File '{filename}' deleted successfully"
-        })
+        return JSONResponse(
+            content={
+                "status": "success",
+                "message": f"File '{filename}' deleted successfully",
+            }
+        )
 
     except Exception as e:
-        return JSONResponse(content={
-            "status": "error",
-            "message": str(e)
-        }, status_code=500)
+        return JSONResponse(
+            content={"status": "error", "message": str(e)}, status_code=500
+        )
 
 
 @app.get("/api/files/yesterday")
@@ -544,10 +544,13 @@ async def get_yesterday_files(date_now: Optional[str] = None):
             try:
                 current_date = datetime.strptime(date_now, "%Y-%m-%d")
             except ValueError:
-                return JSONResponse(content={
-                    "status": "error",
-                    "message": "Invalid date format. Use YYYY-MM-DD"
-                }, status_code=400)
+                return JSONResponse(
+                    content={
+                        "status": "error",
+                        "message": "Invalid date format. Use YYYY-MM-DD",
+                    },
+                    status_code=400,
+                )
         else:
             current_date = datetime.now()
 
@@ -556,20 +559,23 @@ async def get_yesterday_files(date_now: Optional[str] = None):
         yesterday_str = yesterday.strftime("%Y-%m-%d")
 
         # Pattern to match date in filename (YYYY-MM-DD)
-        date_pattern = re.compile(r'(\d{4}-\d{2}-\d{2})')
+        date_pattern = re.compile(r"(\d{4}-\d{2}-\d{2})")
 
         # Get all files from n8n_ffmpeg folder
         if not STATICFILES_DIR.exists():
-            return JSONResponse(content={
-                "status": "error",
-                "message": "n8n_ffmpeg folder not found",
-                "files": []
-            }, status_code=404)
+            return JSONResponse(
+                content={
+                    "status": "error",
+                    "message": "n8n_ffmpeg folder not found",
+                    "files": [],
+                },
+                status_code=404,
+            )
 
         yesterday_files = []
 
         # Recursively search for files
-        for item in STATICFILES_DIR.rglob('*'):
+        for item in STATICFILES_DIR.rglob("*"):
             if item.is_file():
                 # Extract date from filename
                 match = date_pattern.search(item.name)
@@ -581,33 +587,37 @@ async def get_yesterday_files(date_now: Optional[str] = None):
                         relative_path = str(item.relative_to(STATICFILES_DIR))
                         file_size = item.stat().st_size
 
-                        yesterday_files.append({
-                            "name": item.name,
-                            "path": relative_path.replace("\\", "/"),
-                            "date": file_date,
-                            "size": file_size,
-                            "size_kb": round(file_size / 1024, 2),
-                            "size_mb": round(file_size / 1024 / 1024, 2),
-                            "modified": datetime.fromtimestamp(item.stat().st_mtime).strftime("%Y-%m-%d %H:%M:%S")
-                        })
+                        yesterday_files.append(
+                            {
+                                "name": item.name,
+                                "path": relative_path.replace("\\", "/"),
+                                "date": file_date,
+                                "size": file_size,
+                                "size_kb": round(file_size / 1024, 2),
+                                "size_mb": round(file_size / 1024 / 1024, 2),
+                                "modified": datetime.fromtimestamp(
+                                    item.stat().st_mtime
+                                ).strftime("%Y-%m-%d %H:%M:%S"),
+                            }
+                        )
 
         # Sort by filename
         yesterday_files.sort(key=lambda x: x["name"])
 
-        return JSONResponse(content={
-            "status": "success",
-            "current_date": current_date.strftime("%Y-%m-%d"),
-            "yesterday_date": yesterday_str,
-            "total_files": len(yesterday_files),
-            "files": yesterday_files
-        })
+        return JSONResponse(
+            content={
+                "status": "success",
+                "current_date": current_date.strftime("%Y-%m-%d"),
+                "yesterday_date": yesterday_str,
+                "total_files": len(yesterday_files),
+                "files": yesterday_files,
+            }
+        )
 
     except Exception as e:
-        return JSONResponse(content={
-            "status": "error",
-            "message": str(e),
-            "files": []
-        }, status_code=500)
+        return JSONResponse(
+            content={"status": "error", "message": str(e), "files": []}, status_code=500
+        )
 
 
 # Thread pool for running ffmpeg in background
@@ -628,32 +638,33 @@ def merge_videos_sync(video_files: List[Path], output_path: Path) -> dict:
     """
     try:
         # Create a temporary file list for ffmpeg concat
-        with tempfile.NamedTemporaryFile(mode='w', suffix='.txt', delete=False, encoding='utf-8') as f:
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".txt", delete=False, encoding="utf-8"
+        ) as f:
             concat_file = f.name
             for video_file in video_files:
                 # Write absolute path with forward slashes and escape special characters
-                file_path = str(video_file.absolute()).replace('\\', '/')
+                file_path = str(video_file.absolute()).replace("\\", "/")
                 f.write(f"file '{file_path}'\n")
 
         try:
             # Use ffmpeg to merge and convert videos to 1920x1080 landscape
             # Scale vertical videos (1080x1920) to horizontal (1920x1080) with black bars
             (
-                ffmpeg
-                .input(concat_file, format='concat', safe=0)
+                ffmpeg.input(concat_file, format="concat", safe=0)
                 .output(
                     str(output_path),
-                    vf='scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black',
+                    vf="scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black",
                     # Video codec settings
-                    vcodec='libx264',
+                    vcodec="libx264",
                     # Encoding speed (ultrafast, fast, medium, slow)
-                    preset='medium',
+                    preset="medium",
                     crf=23,  # Quality (18-28, lower = better quality)
                     # Audio codec settings
-                    acodec='aac',
-                    audio_bitrate='128k',
+                    acodec="aac",
+                    audio_bitrate="128k",
                     # Other settings
-                    loglevel='error'
+                    loglevel="error",
                 )
                 .overwrite_output()
                 .run(capture_stdout=True, capture_stderr=True)
@@ -664,7 +675,7 @@ def merge_videos_sync(video_files: List[Path], output_path: Path) -> dict:
                 "message": f"Successfully merged {len(video_files)} videos",
                 "output_file": output_path.name,
                 "output_size": output_path.stat().st_size,
-                "output_size_mb": round(output_path.stat().st_size / 1024 / 1024, 2)
+                "output_size_mb": round(output_path.stat().st_size / 1024 / 1024, 2),
             }
 
         finally:
@@ -673,15 +684,9 @@ def merge_videos_sync(video_files: List[Path], output_path: Path) -> dict:
 
     except ffmpeg.Error as e:
         error_message = e.stderr.decode() if e.stderr else str(e)
-        return {
-            "status": "error",
-            "message": f"FFmpeg error: {error_message}"
-        }
+        return {"status": "error", "message": f"FFmpeg error: {error_message}"}
     except Exception as e:
-        return {
-            "status": "error",
-            "message": f"Unexpected error: {str(e)}"
-        }
+        return {"status": "error", "message": f"Unexpected error: {str(e)}"}
 
 
 @app.get("/api/files/merge-yesterday")
@@ -706,10 +711,13 @@ async def merge_yesterday_videos(date_now: Optional[str] = None):
             try:
                 current_date = datetime.strptime(date_now, "%Y-%m-%d")
             except ValueError:
-                return JSONResponse(content={
-                    "status": "error",
-                    "message": "Invalid date format. Use YYYY-MM-DD"
-                }, status_code=400)
+                return JSONResponse(
+                    content={
+                        "status": "error",
+                        "message": "Invalid date format. Use YYYY-MM-DD",
+                    },
+                    status_code=400,
+                )
         else:
             current_date = datetime.now()
 
@@ -718,31 +726,33 @@ async def merge_yesterday_videos(date_now: Optional[str] = None):
         yesterday_str = yesterday.strftime("%Y-%m-%d")
 
         # Pattern to match date in filename (YYYY-MM-DD)
-        date_pattern = re.compile(r'(\d{4}-\d{2}-\d{2})')
+        date_pattern = re.compile(r"(\d{4}-\d{2}-\d{2})")
 
         # Get all video files from yesterday
         if not STATICFILES_DIR.exists():
-            return JSONResponse(content={
-                "status": "error",
-                "message": "n8n_ffmpeg folder not found"
-            }, status_code=404)
+            return JSONResponse(
+                content={"status": "error", "message": "n8n_ffmpeg folder not found"},
+                status_code=404,
+            )
 
         video_files = []
-        video_extensions = {'.mp4', '.avi', '.mov',
-                            '.mkv', '.flv', '.wmv', '.webm'}
+        video_extensions = {".mp4", ".avi", ".mov", ".mkv", ".flv", ".wmv", ".webm"}
 
         # Find all video files from yesterday
-        for item in STATICFILES_DIR.rglob('*'):
+        for item in STATICFILES_DIR.rglob("*"):
             if item.is_file() and item.suffix.lower() in video_extensions:
                 match = date_pattern.search(item.name)
                 if match and match.group(1) == yesterday_str:
                     video_files.append(item)
 
         if not video_files:
-            return JSONResponse(content={
-                "status": "error",
-                "message": f"No video files found for {yesterday_str}"
-            }, status_code=404)
+            return JSONResponse(
+                content={
+                    "status": "error",
+                    "message": f"No video files found for {yesterday_str}",
+                },
+                status_code=404,
+            )
 
         # Sort files by name to ensure consistent order
         video_files.sort(key=lambda x: x.name)
@@ -753,32 +763,30 @@ async def merge_yesterday_videos(date_now: Optional[str] = None):
         # Run ffmpeg merge in thread pool to avoid blocking
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
-            executor,
-            merge_videos_sync,
-            video_files,
-            output_path
+            executor, merge_videos_sync, video_files, output_path
         )
 
         if result["status"] == "success":
-            return JSONResponse(content={
-                "status": "success",
-                "message": result["message"],
-                "yesterday_date": yesterday_str,
-                "input_files": [f.name for f in video_files],
-                "total_input_files": len(video_files),
-                "output_file": result["output_file"],
-                "output_size": result["output_size"],
-                "output_size_mb": result["output_size_mb"],
-                "output_url": f"/static/{result['output_file']}"
-            })
+            return JSONResponse(
+                content={
+                    "status": "success",
+                    "message": result["message"],
+                    "yesterday_date": yesterday_str,
+                    "input_files": [f.name for f in video_files],
+                    "total_input_files": len(video_files),
+                    "output_file": result["output_file"],
+                    "output_size": result["output_size"],
+                    "output_size_mb": result["output_size_mb"],
+                    "output_url": f"/static/{result['output_file']}",
+                }
+            )
         else:
-            return JSONResponse(content={
-                "status": "error",
-                "message": result["message"]
-            }, status_code=500)
+            return JSONResponse(
+                content={"status": "error", "message": result["message"]},
+                status_code=500,
+            )
 
     except Exception as e:
-        return JSONResponse(content={
-            "status": "error",
-            "message": str(e)
-        }, status_code=500)
+        return JSONResponse(
+            content={"status": "error", "message": str(e)}, status_code=500
+        )
