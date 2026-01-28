@@ -18,6 +18,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 import logging
 from contextlib import asynccontextmanager
+from merge_helper import merge_videos_fast
 
 # Configure logging
 logging.basicConfig(
@@ -122,17 +123,30 @@ async def merge_today_videos_job():
         output_filename = f"{today_str}.mp4"
         output_path = STATICFILES_DIR / output_filename
 
-        # Run ffmpeg merge in thread pool
+        # Try FAST merge first (codec copy - no re-encoding)
+        # This is 10-50x faster but only works if all videos have same format
         loop = asyncio.get_event_loop()
-        result = await loop.run_in_executor(
-            executor, merge_videos_sync, video_files, output_path
+        logger.info(
+            f"Attempting FAST merge (codec copy) for {len(video_files)} videos..."
         )
+        result = await loop.run_in_executor(
+            executor, merge_videos_fast, video_files, output_path
+        )
+
+        # If fast merge failed, fall back to slow merge with re-encoding
+        if result["status"] == "error":
+            logger.warning(f"Fast merge failed: {result['message']}")
+            logger.info("Falling back to slow merge with re-encoding...")
+            result = await loop.run_in_executor(
+                executor, merge_videos_sync, video_files, output_path
+            )
 
         if result["status"] == "success":
             logger.info(
                 f"✅ Successfully merged {len(video_files)} videos into {output_filename}"
             )
             logger.info(f"   Output size: {result['output_size_mb']} MB")
+            logger.info(f"   Method: {result['message']}")
         else:
             logger.error(f"❌ Failed to merge videos: {result['message']}")
 
@@ -650,6 +664,7 @@ def merge_videos_sync(video_files: List[Path], output_path: Path) -> dict:
         try:
             # Use ffmpeg to merge and convert videos to 1920x1080 landscape
             # Scale vertical videos (1080x1920) to horizontal (1920x1080) with black bars
+            # Using 'ultrafast' preset for much faster encoding (important when merging many videos)
             (
                 ffmpeg.input(concat_file, format="concat", safe=0)
                 .output(
@@ -657,8 +672,8 @@ def merge_videos_sync(video_files: List[Path], output_path: Path) -> dict:
                     vf="scale=1920:1080:force_original_aspect_ratio=decrease,pad=1920:1080:(ow-iw)/2:(oh-ih)/2:black",
                     # Video codec settings
                     vcodec="libx264",
-                    # Encoding speed (ultrafast, fast, medium, slow)
-                    preset="medium",
+                    # Encoding speed (ultrafast = fastest encoding, larger file size)
+                    preset="ultrafast",
                     crf=23,  # Quality (18-28, lower = better quality)
                     # Audio codec settings
                     acodec="aac",
@@ -759,11 +774,18 @@ async def merge_today_videos(date_now: Optional[str] = None):
         output_filename = f"{today_str}.mp4"
         output_path = STATICFILES_DIR / output_filename
 
-        # Run ffmpeg merge in thread pool to avoid blocking
+        # Try FAST merge first (codec copy - no re-encoding)
+        # This is 10-50x faster but only works if all videos have same format
         loop = asyncio.get_event_loop()
         result = await loop.run_in_executor(
-            executor, merge_videos_sync, video_files, output_path
+            executor, merge_videos_fast, video_files, output_path
         )
+
+        # If fast merge failed, fall back to slow merge with re-encoding
+        if result["status"] == "error":
+            result = await loop.run_in_executor(
+                executor, merge_videos_sync, video_files, output_path
+            )
 
         if result["status"] == "success":
             return JSONResponse(
