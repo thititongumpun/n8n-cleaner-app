@@ -252,7 +252,11 @@ content %}
   function toggleSelectAll(checkbox) {
     const checkboxes = document.querySelectorAll(".file-checkbox");
     checkboxes.forEach((cb) => {
-      cb.checked = checkbox.checked;
+      // Only select visible rows
+      const row = cb.closest("tr");
+      if (row.style.display !== "none") {
+        cb.checked = checkbox.checked;
+      }
     });
     updateDeleteButton();
   }
