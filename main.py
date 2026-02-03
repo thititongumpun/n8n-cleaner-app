@@ -18,7 +18,6 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 import logging
 from contextlib import asynccontextmanager
-from merge_helper import merge_videos_fast
 
 # Configure logging
 logging.basicConfig(
@@ -42,14 +41,16 @@ async def lifespan(app: FastAPI):
     # Startup: Start the scheduler
     scheduler.add_job(
         merge_today_videos_job,
-        trigger=CronTrigger.from_crontab("0 8 * * *"),  # Run at 18:00 (6 PM) every day
+        # Run at 18:00 (6 PM) every day
+        trigger=CronTrigger.from_crontab("0 8 * * *"),
         id="merge_today_videos",
         name="Merge Today's Videos",
         replace_existing=True,
     )
 
     scheduler.start()
-    logger.info("🚀 Scheduler started - Video merge job will run daily at 6 PM (18:00)")
+    logger.info(
+        "🚀 Scheduler started - Video merge job will run daily at 6 PM (18:00)")
 
     yield  # Application is running
 
@@ -82,45 +83,77 @@ STATICFILES_DIR = Path("n8n_ffmpeg")
 # Scheduled job function
 async def merge_today_videos_job():
     """
-    Scheduled job that runs at 6 PM to merge today's videos.
-    This is the same logic as the API endpoint but runs automatically.
+    Scheduled job that runs at 8 AM to merge videos from the last 24 hours.
+    This checks for files with datetime in format: YYYY-MM-DD_HH-MM-SS
+    Example: xxx_xxx_2026-02-03_15-05-36.mp4
+
+    If run at 2026-02-04 08:00:00, it will find files from:
+    2026-02-03 07:59:00 to 2026-02-04 08:01:00
     """
     try:
-        logger.info("Starting scheduled video merge job...")
+        logger.info(
+            "Starting scheduled video merge job (24-hour news cycle)...")
 
-        # Use current date (will be called at 6 PM to merge today's videos)
-        current_date = datetime.now()
-        today_str = current_date.strftime("%Y-%m-%d")
+        # Get current time
+        current_time = datetime.now()
 
-        # Pattern to match date in filename (YYYY-MM-DD)
-        date_pattern = re.compile(r"(\d{4}-\d{2}-\d{2})")
+        # Calculate 24 hours ago (with 1 minute buffer on each side)
+        time_24h_ago = current_time - timedelta(hours=24, minutes=1)
+        time_now_plus_buffer = current_time + timedelta(minutes=1)
 
-        # Get all video files from today
+        logger.info(
+            f"Looking for videos from {time_24h_ago.strftime('%Y-%m-%d %H:%M:%S')} to {time_now_plus_buffer.strftime('%Y-%m-%d %H:%M:%S')}")
+
+        # Pattern to match datetime in filename (YYYY-MM-DD_HH-MM-SS)
+        datetime_pattern = re.compile(
+            r"(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})")
+
+        # Get all video files from the last 24 hours
         if not STATICFILES_DIR.exists():
             logger.error("n8n_ffmpeg folder not found")
             return
 
         video_files = []
-        video_extensions = {".mp4", ".avi", ".mov", ".mkv", ".flv", ".wmv", ".webm"}
+        video_extensions = {".mp4", ".avi", ".mov",
+                            ".mkv", ".flv", ".wmv", ".webm"}
 
-        # Find all video files from today
+        # Find all video files from the last 24 hours
         for item in STATICFILES_DIR.rglob("*"):
             if item.is_file() and item.suffix.lower() in video_extensions:
-                match = date_pattern.search(item.name)
-                if match and match.group(1) == today_str:
-                    video_files.append(item)
+                match = datetime_pattern.search(item.name)
+                if match:
+                    try:
+                        # Extract date and time from filename
+                        date_str = match.group(1)  # YYYY-MM-DD
+                        time_str = match.group(2)  # HH-MM-SS
+
+                        # Convert to datetime object
+                        file_datetime_str = f"{date_str} {time_str.replace('-', ':')}"
+                        file_datetime = datetime.strptime(
+                            file_datetime_str, "%Y-%m-%d %H:%M:%S")
+
+                        # Check if file is within the 24-hour window
+                        if time_24h_ago <= file_datetime <= time_now_plus_buffer:
+                            video_files.append(item)
+                            logger.debug(
+                                f"Found video: {item.name} ({file_datetime})")
+                    except ValueError as e:
+                        logger.warning(
+                            f"Could not parse datetime from filename: {item.name} - {e}")
+                        continue
 
         if not video_files:
-            logger.warning(f"No video files found for {today_str}")
+            logger.warning(f"No video files found for the last 24 hours")
             return
 
         # Sort files by name to ensure consistent order
         video_files.sort(key=lambda x: x.name)
 
-        logger.info(f"Found {len(video_files)} videos to merge for {today_str}")
+        logger.info(
+            f"Found {len(video_files)} videos to merge for the last 24 hours")
 
-        # Generate output filename
-        output_filename = f"hotnews_{today_str}.mp4"
+        # Generate output filename with current date
+        output_filename = f"hotnews_{current_time.strftime('%Y-%m-%d')}.mp4"
         output_path = STATICFILES_DIR / output_filename
 
         # Try FAST merge first (codec copy - no re-encoding)
@@ -151,7 +184,8 @@ async def merge_today_videos_job():
             logger.error(f"❌ Failed to merge videos: {result['message']}")
 
     except Exception as e:
-        logger.error(f"❌ Error in scheduled merge job: {str(e)}", exc_info=True)
+        logger.error(
+            f"❌ Error in scheduled merge job: {str(e)}", exc_info=True)
 
 
 @app.get("/")
@@ -389,7 +423,8 @@ async def list_yt_files():
         files.sort(key=lambda x: x["name"])
 
         return JSONResponse(
-            content={"status": "success", "total_files": len(files), "files": files}
+            content={"status": "success",
+                     "total_files": len(files), "files": files}
         )
 
     except Exception as e:
@@ -516,7 +551,8 @@ async def delete_file_from_yt(filename: str):
         # Only delete files, not directories
         if not target_path.is_file():
             return JSONResponse(
-                content={"status": "error", "message": "Cannot delete directories"},
+                content={"status": "error",
+                         "message": "Cannot delete directories"},
                 status_code=400,
             )
 
@@ -539,13 +575,16 @@ async def delete_file_from_yt(filename: str):
 @app.get("/api/files/yesterday")
 async def get_yesterday_files(date_now: Optional[str] = None):
     """
-    Get all files from n8n_ffmpeg folder that have yesterday's date in their filename.
+    Get all files from n8n_ffmpeg folder from the last 24 hours.
+
+    This checks for files with datetime in format: YYYY-MM-DD_HH-MM-SS
+    Example: xxx_xxx_2026-02-03_15-05-36.mp4
 
     Args:
-        date_now: Optional date string in format YYYY-MM-DD (defaults to today)
+        date_now: Optional datetime string in format YYYY-MM-DD HH:MM:SS (defaults to now)
 
     Returns:
-        JSON response with list of files from yesterday
+        JSON response with list of files from the last 24 hours
 
     Example filenames:
         - news_2026-01-26_13-00-22.mp4
@@ -553,27 +592,32 @@ async def get_yesterday_files(date_now: Optional[str] = None):
         - sports_news_2026-01-26_09-03-22.mp4
     """
     try:
-        # Parse the current date or use today
+        # Parse the current datetime or use now
         if date_now:
             try:
-                current_date = datetime.strptime(date_now, "%Y-%m-%d")
+                current_time = datetime.strptime(date_now, "%Y-%m-%d %H:%M:%S")
             except ValueError:
-                return JSONResponse(
-                    content={
-                        "status": "error",
-                        "message": "Invalid date format. Use YYYY-MM-DD",
-                    },
-                    status_code=400,
-                )
+                # Try date-only format for backward compatibility
+                try:
+                    current_time = datetime.strptime(date_now, "%Y-%m-%d")
+                except ValueError:
+                    return JSONResponse(
+                        content={
+                            "status": "error",
+                            "message": "Invalid date format. Use YYYY-MM-DD HH:MM:SS or YYYY-MM-DD",
+                        },
+                        status_code=400,
+                    )
         else:
-            current_date = datetime.now()
+            current_time = datetime.now()
 
-        # Calculate yesterday's date
-        yesterday = current_date - timedelta(days=1)
-        yesterday_str = yesterday.strftime("%Y-%m-%d")
+        # Calculate 24 hours ago (with 1 minute buffer on each side)
+        time_24h_ago = current_time - timedelta(hours=24, minutes=1)
+        time_now_plus_buffer = current_time + timedelta(minutes=1)
 
-        # Pattern to match date in filename (YYYY-MM-DD)
-        date_pattern = re.compile(r"(\d{4}-\d{2}-\d{2})")
+        # Pattern to match datetime in filename (YYYY-MM-DD_HH-MM-SS)
+        datetime_pattern = re.compile(
+            r"(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})")
 
         # Get all files from n8n_ffmpeg folder
         if not STATICFILES_DIR.exists():
@@ -586,45 +630,60 @@ async def get_yesterday_files(date_now: Optional[str] = None):
                 status_code=404,
             )
 
-        yesterday_files = []
+        files_24h = []
 
-        # Recursively search for files
+        # Recursively search for files from the last 24 hours
         for item in STATICFILES_DIR.rglob("*"):
             if item.is_file():
-                # Extract date from filename
-                match = date_pattern.search(item.name)
+                # Extract datetime from filename
+                match = datetime_pattern.search(item.name)
                 if match:
-                    file_date = match.group(1)
+                    try:
+                        # Extract date and time from filename
+                        date_str = match.group(1)  # YYYY-MM-DD
+                        time_str = match.group(2)  # HH-MM-SS
 
-                    # Check if the date matches yesterday
-                    if file_date == yesterday_str:
-                        relative_path = str(item.relative_to(STATICFILES_DIR))
-                        file_size = item.stat().st_size
+                        # Convert to datetime object
+                        file_datetime_str = f"{date_str} {time_str.replace('-', ':')}"
+                        file_datetime = datetime.strptime(
+                            file_datetime_str, "%Y-%m-%d %H:%M:%S")
 
-                        yesterday_files.append(
-                            {
-                                "name": item.name,
-                                "path": relative_path.replace("\\", "/"),
-                                "date": file_date,
-                                "size": file_size,
-                                "size_kb": round(file_size / 1024, 2),
-                                "size_mb": round(file_size / 1024 / 1024, 2),
-                                "modified": datetime.fromtimestamp(
-                                    item.stat().st_mtime
-                                ).strftime("%Y-%m-%d %H:%M:%S"),
-                            }
-                        )
+                        # Check if file is within the 24-hour window
+                        if time_24h_ago <= file_datetime <= time_now_plus_buffer:
+                            relative_path = str(
+                                item.relative_to(STATICFILES_DIR))
+                            file_size = item.stat().st_size
+
+                            files_24h.append(
+                                {
+                                    "name": item.name,
+                                    "path": relative_path.replace("\\", "/"),
+                                    "datetime": file_datetime.strftime("%Y-%m-%d %H:%M:%S"),
+                                    "size": file_size,
+                                    "size_kb": round(file_size / 1024, 2),
+                                    "size_mb": round(file_size / 1024 / 1024, 2),
+                                    "modified": datetime.fromtimestamp(
+                                        item.stat().st_mtime
+                                    ).strftime("%Y-%m-%d %H:%M:%S"),
+                                }
+                            )
+                    except ValueError:
+                        # Skip files with invalid datetime format
+                        continue
 
         # Sort by filename
-        yesterday_files.sort(key=lambda x: x["name"])
+        files_24h.sort(key=lambda x: x["name"])
 
         return JSONResponse(
             content={
                 "status": "success",
-                "current_date": current_date.strftime("%Y-%m-%d"),
-                "yesterday_date": yesterday_str,
-                "total_files": len(yesterday_files),
-                "files": yesterday_files,
+                "current_time": current_time.strftime("%Y-%m-%d %H:%M:%S"),
+                "time_range": {
+                    "from": time_24h_ago.strftime("%Y-%m-%d %H:%M:%S"),
+                    "to": time_now_plus_buffer.strftime("%Y-%m-%d %H:%M:%S"),
+                },
+                "total_files": len(files_24h),
+                "files": files_24h,
             }
         )
 
@@ -636,6 +695,70 @@ async def get_yesterday_files(date_now: Optional[str] = None):
 
 # Thread pool for running ffmpeg in background
 executor = ThreadPoolExecutor(max_workers=2)
+
+
+def merge_videos_fast(video_files: List[Path], output_path: Path) -> dict:
+    """
+    SUPER FAST merge using codec copy (no re-encoding).
+
+    This is 10-50x faster than re-encoding but requires all videos to have:
+    - Same codec (e.g., all h264)
+    - Same resolution (e.g., all 1920x1080)
+    - Same frame rate (e.g., all 30fps)
+
+    If videos have different formats, this will fail and you should use merge_videos_sync instead.
+
+    Args:
+        video_files: List of video file paths to merge
+        output_path: Path where the merged video will be saved
+
+    Returns:
+        dict with status and message
+    """
+    try:
+        # Create a temporary file list for ffmpeg concat
+        with tempfile.NamedTemporaryFile(
+            mode="w", suffix=".txt", delete=False, encoding="utf-8"
+        ) as f:
+            concat_file = f.name
+            for video_file in video_files:
+                # Write absolute path with forward slashes
+                file_path = str(video_file.absolute()).replace("\\", "/")
+                f.write(f"file '{file_path}'\n")
+
+        try:
+            # Use concat demuxer with codec copy (no re-encoding) - VERY FAST!
+            (
+                ffmpeg.input(concat_file, format="concat", safe=0)
+                .output(
+                    str(output_path),
+                    c="copy",  # Copy codec - no re-encoding!
+                    loglevel="error",
+                )
+                .overwrite_output()
+                .run(capture_stdout=True, capture_stderr=True)
+            )
+
+            return {
+                "status": "success",
+                "message": f"Successfully merged {len(video_files)} videos (FAST mode - no re-encoding)",
+                "output_file": output_path.name,
+                "output_size": output_path.stat().st_size,
+                "output_size_mb": round(output_path.stat().st_size / 1024 / 1024, 2),
+            }
+
+        finally:
+            # Clean up temporary concat file
+            Path(concat_file).unlink(missing_ok=True)
+
+    except ffmpeg.Error as e:
+        error_message = e.stderr.decode() if e.stderr else str(e)
+        return {
+            "status": "error",
+            "message": f"FFmpeg fast merge error: {error_message}",
+        }
+    except Exception as e:
+        return {"status": "error", "message": f"Unexpected error: {str(e)}"}
 
 
 def merge_videos_sync(video_files: List[Path], output_path: Path) -> dict:
@@ -707,63 +830,89 @@ def merge_videos_sync(video_files: List[Path], output_path: Path) -> dict:
 @app.get("/api/files/merge-today")
 async def merge_today_videos(date_now: Optional[str] = None):
     """
-    Merge all video files from today into a single video file.
+    Merge all video files from the last 24 hours into a single video file.
+
+    This checks for files with datetime in format: YYYY-MM-DD_HH-MM-SS
+    Example: xxx_xxx_2026-02-03_15-05-36.mp4
 
     Args:
-        date_now: Optional date string in format YYYY-MM-DD (defaults to today)
+        date_now: Optional datetime string in format YYYY-MM-DD HH:MM:SS (defaults to now)
 
     Returns:
         JSON response with merge status and output file info
 
     Note:
         - Videos will be merged in alphabetical order by filename
-        - Output file will be saved as: YYYY-MM-DD.mp4
+        - Output file will be saved as: hotnews_YYYY-MM-DD.mp4
         - This uses ffmpeg to merge and convert videos to 1920x1080 landscape
     """
     try:
-        # Parse the current date or use today
+        # Parse the current datetime or use now
         if date_now:
             try:
-                current_date = datetime.strptime(date_now, "%Y-%m-%d")
+                current_time = datetime.strptime(date_now, "%Y-%m-%d %H:%M:%S")
             except ValueError:
-                return JSONResponse(
-                    content={
-                        "status": "error",
-                        "message": "Invalid date format. Use YYYY-MM-DD",
-                    },
-                    status_code=400,
-                )
+                # Try date-only format for backward compatibility
+                try:
+                    current_time = datetime.strptime(date_now, "%Y-%m-%d")
+                except ValueError:
+                    return JSONResponse(
+                        content={
+                            "status": "error",
+                            "message": "Invalid date format. Use YYYY-MM-DD HH:MM:SS or YYYY-MM-DD",
+                        },
+                        status_code=400,
+                    )
         else:
-            current_date = datetime.now()
+            current_time = datetime.now()
 
-        # Use today's date
-        today_str = current_date.strftime("%Y-%m-%d")
+        # Calculate 24 hours ago (with 1 minute buffer on each side)
+        time_24h_ago = current_time - timedelta(hours=24, minutes=1)
+        time_now_plus_buffer = current_time + timedelta(minutes=1)
 
-        # Pattern to match date in filename (YYYY-MM-DD)
-        date_pattern = re.compile(r"(\d{4}-\d{2}-\d{2})")
+        # Pattern to match datetime in filename (YYYY-MM-DD_HH-MM-SS)
+        datetime_pattern = re.compile(
+            r"(\d{4}-\d{2}-\d{2})_(\d{2}-\d{2}-\d{2})")
 
-        # Get all video files from today
+        # Get all video files from the last 24 hours
         if not STATICFILES_DIR.exists():
             return JSONResponse(
-                content={"status": "error", "message": "n8n_ffmpeg folder not found"},
+                content={"status": "error",
+                         "message": "n8n_ffmpeg folder not found"},
                 status_code=404,
             )
 
         video_files = []
-        video_extensions = {".mp4", ".avi", ".mov", ".mkv", ".flv", ".wmv", ".webm"}
+        video_extensions = {".mp4", ".avi", ".mov",
+                            ".mkv", ".flv", ".wmv", ".webm"}
 
-        # Find all video files from today
+        # Find all video files from the last 24 hours
         for item in STATICFILES_DIR.rglob("*"):
             if item.is_file() and item.suffix.lower() in video_extensions:
-                match = date_pattern.search(item.name)
-                if match and match.group(1) == today_str:
-                    video_files.append(item)
+                match = datetime_pattern.search(item.name)
+                if match:
+                    try:
+                        # Extract date and time from filename
+                        date_str = match.group(1)  # YYYY-MM-DD
+                        time_str = match.group(2)  # HH-MM-SS
+
+                        # Convert to datetime object
+                        file_datetime_str = f"{date_str} {time_str.replace('-', ':')}"
+                        file_datetime = datetime.strptime(
+                            file_datetime_str, "%Y-%m-%d %H:%M:%S")
+
+                        # Check if file is within the 24-hour window
+                        if time_24h_ago <= file_datetime <= time_now_plus_buffer:
+                            video_files.append(item)
+                    except ValueError:
+                        # Skip files with invalid datetime format
+                        continue
 
         if not video_files:
             return JSONResponse(
                 content={
                     "status": "error",
-                    "message": f"No video files found for {today_str}",
+                    "message": f"No video files found for the last 24 hours (from {time_24h_ago.strftime('%Y-%m-%d %H:%M:%S')} to {time_now_plus_buffer.strftime('%Y-%m-%d %H:%M:%S')})",
                 },
                 status_code=404,
             )
@@ -771,7 +920,7 @@ async def merge_today_videos(date_now: Optional[str] = None):
         # Sort files by name to ensure consistent order
         video_files.sort(key=lambda x: x.name)
 
-        output_filename = f"hotnews_{today_str}.mp4"
+        output_filename = f"hotnews_{current_time.strftime('%Y-%m-%d')}.mp4"
         output_path = STATICFILES_DIR / output_filename
 
         # Try FAST merge first (codec copy - no re-encoding)
@@ -792,7 +941,10 @@ async def merge_today_videos(date_now: Optional[str] = None):
                 content={
                     "status": "success",
                     "message": result["message"],
-                    "today_date": today_str,
+                    "time_range": {
+                        "from": time_24h_ago.strftime('%Y-%m-%d %H:%M:%S'),
+                        "to": time_now_plus_buffer.strftime('%Y-%m-%d %H:%M:%S'),
+                    },
                     "input_files": [f.name for f in video_files],
                     "total_input_files": len(video_files),
                     "output_file": result["output_file"],
