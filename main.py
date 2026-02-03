@@ -42,7 +42,7 @@ async def lifespan(app: FastAPI):
     # Startup: Start the scheduler
     scheduler.add_job(
         merge_today_videos_job,
-        trigger=CronTrigger(hour=18, minute=0),  # Run at 18:00 (6 PM) every day
+        trigger=CronTrigger.from_crontab("0 8 * * *"),  # Run at 18:00 (6 PM) every day
         id="merge_today_videos",
         name="Merge Today's Videos",
         replace_existing=True,
